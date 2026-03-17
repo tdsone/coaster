@@ -33,3 +33,7 @@ wandb/
 
 # uv
 uv.lock
+
+# Other
+.env
+data/samples.pkl
