@@ -103,14 +103,16 @@ coaster/
     dataset.py          SyntheticDataset (lazy numpy), collate_fn, make_dataloader()
     real_data.py        RealRNADataset (parquet-backed), center-crop/pad DNA to dna_len
   training/
-    trainer.py          Trainer (train loop, eval, checkpointing)
+    trainer.py          Trainer (train loop, eval, checkpointing, wandb logging)
 scripts/
   train.py              Training entry point (synthetic or real data)
-  generate.py           (stub) inference script
-  evaluate.py           (stub) evaluation script
   align_modal.py        Modal pipeline: genome download → STAR index → alignment
   extract_reads_modal.py  Modal pipeline: BAM → reads.parquet + samples_yeast.parquet
   download_sra.py       Local SRA download helper for SRR21628668
+evals/
+  generate.py           model → per-window FASTQs (temperature sampling)
+  eval_modal.py         Modal: STAR index → align → bigwigs + real coverage extraction
+  compare.py            synthetic vs real coverage → Pearson/Spearman metrics
 configs/
   default.yaml          Default hyperparameters
 tests/                  58 pytest tests
@@ -166,7 +168,7 @@ uv run python scripts/train.py --real \
 uv run python scripts/train.py --real --overfit
 ```
 
-The config device defaults to `mps`. Override with `--device cuda` or `--device cpu`, or change `training.device` in `configs/default.yaml`.
+The config device defaults to `cuda`. Override with `--device cuda:N` for a specific GPU, or `--device cpu`.
 
 Checkpoints are written to `checkpoints/epoch_NNN.pt` after each epoch.
 
@@ -182,7 +184,7 @@ Checkpoints are written to `checkpoints/epoch_NNN.pt` after each epoch.
 | Attention heads | 4 |
 | FFN dim | 1024 |
 | Max RNA length | 200 tokens |
-| Batch size | 5 |
+| Batch size | 32 |
 | Learning rate | 3e-4 |
 | LR schedule | Cosine with 500-step warmup |
 | Weight decay | 0.01 |
