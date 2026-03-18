@@ -49,6 +49,7 @@ WINDOW_FA = EVALS_DIR / "windows.fa"   # concatenated window sequences
 BAM_DIR = EVALS_DIR / "bam"
 BIGWIG_DIR = EVALS_DIR / "bigwigs"
 REAL_COV_DIR = EVALS_DIR / "real_coverage"
+SYNTH_COV_DIR = EVALS_DIR / "synth_coverage"
 
 REAL_BAM = ALIGNED_DIR / "SRR21628668_Aligned.sortedByCoord.out.bam"
 
@@ -317,25 +318,86 @@ def real_coverage() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5 — extract synthetic per-window coverage from the synthetic BAM
+# ---------------------------------------------------------------------------
+
+
+@app.function(
+    image=bio_image,
+    volumes={
+        str(DATA_DIR): data_vol,
+        str(EVALS_DIR): evals_vol,
+    },
+    cpu=4,
+    memory=8192,
+    timeout=3600,
+)
+def synth_coverage() -> None:
+    """Extract per-window coverage from the synthetic BAM → numpy arrays.
+
+    The synthetic BAM uses sample_idx as chromosome names (one per window).
+    Output: SYNTH_COV_DIR/{sample_idx}.npy  — shape (window_len,), raw counts.
+    """
+    import numpy as np
+    import pandas as pd
+    import pysam
+
+    bam_path = BAM_DIR / "synthetic_Aligned.sortedByCoord.out.bam"
+    if not bam_path.exists():
+        sys.exit("Missing synthetic BAM — run --step align first")
+
+    SYNTH_COV_DIR.mkdir(parents=True, exist_ok=True)
+
+    samples = pd.read_parquet(DATA_DIR / "samples_yeast.parquet")
+
+    with pysam.AlignmentFile(str(bam_path), "rb") as bam:
+        for sample_idx, row in samples.iterrows():
+            out_path = SYNTH_COV_DIR / f"{sample_idx}.npy"
+            if out_path.exists():
+                continue
+
+            seq_len = len(row["input_sequence"])
+            coverage = np.zeros(seq_len, dtype=np.float32)
+
+            try:
+                for read in bam.fetch(str(sample_idx), 0, seq_len):
+                    if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                        continue
+                    for pos in read.get_reference_positions():
+                        if 0 <= pos < seq_len:
+                            coverage[pos] += 1
+            except ValueError:
+                pass  # chromosome not present (no reads aligned to this window)
+
+            np.save(str(out_path), coverage)
+
+    evals_vol.commit()
+    print(f"Synthetic coverage arrays written to {SYNTH_COV_DIR}/")
+
+
+# ---------------------------------------------------------------------------
 # Local entrypoint
 # ---------------------------------------------------------------------------
 
 
 @app.local_entrypoint()
 def main(step: str = "all") -> None:
-    steps = {"build_index", "align", "bigwigs", "real_coverage", "all"}
+    steps = {"build_index", "align", "bigwigs", "real_coverage", "synth_coverage", "all"}
     if step not in steps:
         sys.exit(f"Unknown step '{step}'. Choose: {' | '.join(sorted(steps))}")
 
     if step in ("build_index", "all"):
-        print("=== [1/4] Building STAR index ===")
+        print("=== [1/5] Building STAR index ===")
         build_index.remote()
     if step in ("align", "all"):
-        print("=== [2/4] Aligning synthetic reads ===")
+        print("=== [2/5] Aligning synthetic reads ===")
         align.remote()
     if step in ("bigwigs", "all"):
-        print("=== [3/4] Generating bigwigs ===")
+        print("=== [3/5] Generating bigwigs ===")
         make_bigwigs.remote()
     if step in ("real_coverage", "all"):
-        print("=== [4/4] Extracting real coverage ===")
+        print("=== [4/5] Extracting real coverage ===")
         real_coverage.remote()
+    if step in ("synth_coverage", "all"):
+        print("=== [5/5] Extracting synthetic coverage ===")
+        synth_coverage.remote()

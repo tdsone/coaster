@@ -51,6 +51,8 @@ class RealRNADataset(Dataset):
         dna_len: int = 5000,
         min_read_len: int = 50,
         max_read_len: int = 200,
+        max_reads_per_window: int | None = None,
+        seed: int = 42,
     ) -> None:
         samples = pd.read_parquet(samples_path)
         reads = pd.read_parquet(reads_path)
@@ -63,6 +65,14 @@ class RealRNADataset(Dataset):
         # Drop reads outside the acceptable length range
         read_lens = reads["read_seq"].str.len()
         reads = reads[(read_lens >= min_read_len) & (read_lens <= max_read_len)]
+
+        # Subsample reads per window if requested
+        if max_reads_per_window is not None:
+            reads = (
+                reads.groupby("sample_idx", sort=False)
+                .apply(lambda g: g.sample(min(len(g), max_reads_per_window), random_state=seed))
+                .reset_index(drop=True)
+            )
 
         # Build a fast dict lookup: sample_idx (int) → dna string
         self.dna_lookup: dict[int, str] = samples["input_sequence"].to_dict()

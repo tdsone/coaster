@@ -39,3 +39,4 @@ uv.lock
 data/samples.pkl
 data/reads.parquet
 data/samples_yeast.parquet
+evals/output/*

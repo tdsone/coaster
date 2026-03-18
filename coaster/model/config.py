@@ -49,6 +49,7 @@ class TrainingConfig:
     device: str = "mps"
     checkpoint_dir: str = "checkpoints"
     log_interval: int = 100
+    val_reads_per_window: int | None = 50
     wandb_project: str | None = None
 
 

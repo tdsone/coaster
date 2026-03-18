@@ -31,4 +31,5 @@ training:
   device: cuda
   checkpoint_dir: checkpoints
   log_interval: 100
+  val_reads_per_window: 50
   wandb_project: coaster

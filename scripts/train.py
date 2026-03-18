@@ -32,7 +32,8 @@ def main() -> None:
     torch.manual_seed(train_cfg.seed)
 
     train_ds = RealRNADataset(args.samples, args.reads, fold="train", dna_len=enc_cfg.dna_len)
-    val_ds = RealRNADataset(args.samples, args.reads, fold="val", dna_len=enc_cfg.dna_len)
+    val_ds = RealRNADataset(args.samples, args.reads, fold="val", dna_len=enc_cfg.dna_len,
+                            max_reads_per_window=train_cfg.val_reads_per_window)
 
     if args.overfit:
         # Single-batch overfit: grab one batch, train on it to ~0 loss
