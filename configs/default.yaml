@@ -20,7 +20,8 @@ decoder:
 
 training:
   batch_size: 32
-  num_epochs: 50000
+  max_steps: 500000
+  eval_interval: 10000
   lr: 3.0e-4
   weight_decay: 0.01
   warmup_steps: 500

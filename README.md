@@ -44,12 +44,11 @@ RNA read (one per forward pass, ~151 nt)
 - **Read extraction** — `scripts/extract_reads_modal.py`: extracts R2 reads (sense strand, dUTP library) from the BAM for each yeast genomic window using reservoir sampling (≤1000 reads/window), saves `reads.parquet` and `samples_yeast.parquet` to the `coaster-data` Modal volume
 - **Model** — full encoder-decoder architecture (`coaster/model/`)
 - **Real data** — `RealRNADataset` pairs 8.65M extracted reads with their 5000 bp DNA windows across train/val/test folds
-- **Synthetic training** — lazy dataset generates random DNA + sampled RNA windows on the fly; used to validate architecture
 - **Trainer** — AdamW + cosine LR schedule with warmup; AMP on CUDA (autocast + grad scaler), float32 on MPS/CPU; checkpoint save/load
 - **Tests** — 58 tests covering tokenizers, model shapes, forward/backward, data pipeline, and training loop
 
 ### Next steps
-- **Switch training loop from epochs to total steps** — with 6.4M train reads and batch size 32, one epoch is ~200K steps; `num_epochs` in the config is not a useful knob for real-data training
+- ~~Switch training loop from epochs to total steps~~ — done: `max_steps` + `eval_interval` replace `num_epochs`
 - **Evaluation pipeline** (see structure below)
 - Unfreeze/replace encoder with NTv3 once real-data training is established
 
@@ -99,8 +98,7 @@ coaster/
     decoder.py          RNADecoder (cross-attention, causal self-attention)
     transformer.py      CoasterModel (encoder + decoder + generate())
   data/
-    synthetic.py        random_dna(), dna_to_rna_window(), generate_synthetic_pair()
-    dataset.py          SyntheticDataset (lazy numpy), collate_fn, make_dataloader()
+    dataset.py          collate_fn, make_dataloader()
     real_data.py        RealRNADataset (parquet-backed), center-crop/pad DNA to dna_len
   training/
     trainer.py          Trainer (train loop, eval, checkpointing, wandb logging)
@@ -136,7 +134,6 @@ modal volume get coaster-data samples_yeast.parquet data/samples_yeast.parquet
 modal volume get coaster-data reads.parquet data/reads.parquet
 ```
 
-**Synthetic data (Phase 1):** Random 4992 bp DNA sequences; target reads are 150 nt windows sampled uniformly and T→U converted. Used to validate architecture before real data is wired up.
 
 ## Setup
 
@@ -150,22 +147,16 @@ uv run pytest                   # run tests
 ## Training
 
 ```bash
-# Real data (recommended) — CUDA
-uv run python scripts/train.py --real --device cuda
+# CUDA (specific GPU)
+uv run python scripts/train.py --device cuda:0
 
-# Real data — Apple Silicon
-uv run python scripts/train.py --real
-
-# Synthetic data only (no parquet files needed)
-uv run python scripts/train.py --device cuda
-
-# Override the data paths
-uv run python scripts/train.py --real \
+# Override data paths
+uv run python scripts/train.py \
     --samples /path/to/samples_yeast.parquet \
     --reads   /path/to/reads.parquet
 
-# Sanity check: overfit one batch to ~0 loss before a full run
-uv run python scripts/train.py --real --overfit
+# Sanity check: overfit a single batch to ~0 loss
+uv run python scripts/train.py --overfit
 ```
 
 The config device defaults to `cuda`. Override with `--device cuda:N` for a specific GPU, or `--device cpu`.
@@ -185,6 +176,8 @@ Checkpoints are written to `checkpoints/epoch_NNN.pt` after each epoch.
 | FFN dim | 1024 |
 | Max RNA length | 200 tokens |
 | Batch size | 32 |
+| Max steps | 500,000 |
+| Eval / checkpoint interval | 10,000 steps |
 | Learning rate | 3e-4 |
 | LR schedule | Cosine with 500-step warmup |
 | Weight decay | 0.01 |

@@ -38,7 +38,8 @@ class DecoderConfig:
 @dataclass(frozen=True)
 class TrainingConfig:
     batch_size: int = 32
-    num_epochs: int = 50
+    max_steps: int = 500_000
+    eval_interval: int = 10_000
     lr: float = 3e-4
     weight_decay: float = 0.01
     warmup_steps: int = 500

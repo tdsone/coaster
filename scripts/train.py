@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Train the Coaster DNA→RNA encoder-decoder model."""
 import argparse
-from torch.utils.data import random_split
+import dataclasses
 
 import torch
 
 from coaster.model import CoasterModel, load_config
-from coaster.data.dataset import SyntheticDataset, make_dataloader
+from coaster.data.dataset import collate_fn, make_dataloader
 from coaster.data.real_data import RealRNADataset
 from coaster.training import Trainer
 
@@ -14,8 +14,7 @@ from coaster.training import Trainer
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--device", default=None, help="Override config device (cpu/mps/cuda)")
-    parser.add_argument("--real", action="store_true", help="Train on real RNA-seq data")
+    parser.add_argument("--device", default=None, help="Override config device (e.g. cuda:0)")
     parser.add_argument("--samples", default="data/samples_yeast.parquet")
     parser.add_argument("--reads", default="data/reads.parquet")
     parser.add_argument("--overfit", action="store_true", help="Overfit a single batch (sanity check)")
@@ -32,28 +31,15 @@ def main() -> None:
 
     torch.manual_seed(train_cfg.seed)
 
-    if args.real:
-        train_ds = RealRNADataset(args.samples, args.reads, fold="train", dna_len=enc_cfg.dna_len)
-        val_ds = RealRNADataset(args.samples, args.reads, fold="val", dna_len=enc_cfg.dna_len)
-    else:
-        dataset = SyntheticDataset(num_samples=train_cfg.num_samples, seed=train_cfg.seed)
-        train_size = int(0.9 * len(dataset))
-        val_size = len(dataset) - train_size
-        train_ds, val_ds = random_split(
-            dataset,
-            [train_size, val_size],
-            generator=torch.Generator().manual_seed(train_cfg.seed),
-        )
+    train_ds = RealRNADataset(args.samples, args.reads, fold="train", dna_len=enc_cfg.dna_len)
+    val_ds = RealRNADataset(args.samples, args.reads, fold="val", dna_len=enc_cfg.dna_len)
 
     if args.overfit:
-        # Single-batch overfit: grab one batch, train on it for 200 steps, expect loss → 0
-        from coaster.data.dataset import collate_fn
-        small_ds = train_ds if args.real else train_ds.dataset
-        batch = collate_fn([small_ds[i] for i in range(train_cfg.batch_size)])
-        train_loader = [batch] * 200
+        # Single-batch overfit: grab one batch, train on it to ~0 loss
+        batch = collate_fn([train_ds[i] for i in range(train_cfg.batch_size)])
+        train_loader = [batch] * train_cfg.max_steps
         val_loader = None
-        import dataclasses
-        train_cfg = dataclasses.replace(train_cfg, num_epochs=1, warmup_steps=0, log_interval=10)
+        train_cfg = dataclasses.replace(train_cfg, warmup_steps=0, log_interval=10)
     else:
         train_loader = make_dataloader(train_ds, batch_size=train_cfg.batch_size, shuffle=True)
         val_loader = make_dataloader(val_ds, batch_size=train_cfg.batch_size, shuffle=False)
