@@ -17,7 +17,7 @@ DNA string (~4992 bp)
   → TransformerEncoder × 4  (d=256, 4 heads, ffn=1024, pre-norm)
   → memory  [B, 624, 256]
 
-RNA read (one per forward pass, ~150 nt)
+RNA read (one per forward pass, ~151 nt)
   → RNATokenizer (PAD/BOS/EOS/A/U/G/C/N, vocab=8)
   → Embedding(8, 256) + LearnedPosEmb
   → TransformerDecoder × 4  (d=256, 4 heads, ffn=1024, pre-norm, cross-attn to memory)
@@ -25,7 +25,7 @@ RNA read (one per forward pass, ~150 nt)
   → logits  [B, T, 8]
 ```
 
-**~5.8M parameters.** Training objective: teacher-forced cross-entropy on RNA token sequences, one read per forward pass.
+**~8M parameters.** Training objective: teacher-forced cross-entropy on RNA token sequences, one read per forward pass.
 
 ### Key design choices
 
@@ -33,23 +33,22 @@ RNA read (one per forward pass, ~150 nt)
 |---|---|
 | Conv1d stride-8 downsampling | Reduces 4992 DNA positions to 624 before self-attention, keeping memory and compute manageable |
 | Sinusoidal pos emb (encoder) | Fixed, no learned parameters needed for fixed-length DNA input |
-| Learned pos emb (decoder) | Better at short sequences (~152 tokens); positions are absolute within a read |
+| Learned pos emb (decoder) | Better at short sequences (~153 tokens); positions are absolute within a read |
 | Pre-norm (`norm_first=True`) | More stable training at small batch sizes |
 | One read per forward pass | Simplest formulation; the model is free to generate any plausible read from the DNA context |
-| `num_workers=0` | Required for MPS — fork-based DataLoader workers conflict with MPS device initialization |
 
 ## Project status
 
 ### Done
-- **Data pipeline** — `scripts/align_modal.py`: full Modal-based pipeline to download the sacCer3 reference genome (Ensembl R111), build a STAR index, download SRR21628668 paired-end RNA-seq reads (~14 GB from NCBI S3), and align to produce a sorted BAM + gene counts
+- **Alignment pipeline** — `scripts/align_modal.py`: Modal-based pipeline to download the sacCer3 reference genome (Ensembl R111), build a STAR index, download SRR21628668 paired-end RNA-seq (~14 GB from NCBI S3), and align to produce a sorted BAM + gene counts
+- **Read extraction** — `scripts/extract_reads_modal.py`: extracts R2 reads (sense strand, dUTP library) from the BAM for each yeast genomic window using reservoir sampling (≤1000 reads/window), saves `reads.parquet` and `samples_yeast.parquet` to the `coaster-data` Modal volume
 - **Model** — full encoder-decoder architecture (`coaster/model/`)
-- **Synthetic training** — lazy dataset generates random DNA + sampled RNA windows on the fly; collate with BOS/EOS framing
-- **Trainer** — AdamW + cosine LR schedule with warmup; AMP-gated (float32 on MPS, autocast on CUDA); checkpoint save/load
+- **Real data** — `RealRNADataset` pairs 8.65M extracted reads with their 5000 bp DNA windows across train/val/test folds
+- **Synthetic training** — lazy dataset generates random DNA + sampled RNA windows on the fly; used to validate architecture
+- **Trainer** — AdamW + cosine LR schedule with warmup; AMP on CUDA (autocast + grad scaler), float32 on MPS/CPU; checkpoint save/load
 - **Tests** — 58 tests covering tokenizers, model shapes, forward/backward, data pipeline, and training loop
 
-### In progress / next steps
-- Wire up real data: extract reads from the aligned BAM (SRR21628668) and pair each read with its genomic DNA window
-- Replace synthetic dataset with real `(DNA window, RNA read)` pairs
+### Next steps
 - Evaluate read sequence accuracy (e.g. edit distance, motif recovery)
 - Unfreeze/replace encoder with NTv3 once real-data training is established
 
@@ -67,13 +66,15 @@ coaster/
   data/
     synthetic.py        random_dna(), dna_to_rna_window(), generate_synthetic_pair()
     dataset.py          SyntheticDataset (lazy numpy), collate_fn, make_dataloader()
+    real_data.py        RealRNADataset (parquet-backed), center-crop/pad DNA to dna_len
   training/
     trainer.py          Trainer (train loop, eval, checkpointing)
 scripts/
-  train.py              Training entry point
+  train.py              Training entry point (synthetic or real data)
   generate.py           (stub) inference script
   evaluate.py           (stub) evaluation script
   align_modal.py        Modal pipeline: genome download → STAR index → alignment
+  extract_reads_modal.py  Modal pipeline: BAM → reads.parquet + samples_yeast.parquet
   download_sra.py       Local SRA download helper for SRR21628668
 configs/
   default.yaml          Default hyperparameters
@@ -82,7 +83,21 @@ tests/                  58 pytest tests
 
 ## Data
 
-**Real data target:** SRR21628668 — BY UBR1 -469A>T *S. cerevisiae* RNA-seq, paired-end, ~152.6M read pairs (PRJNA882076). Aligned to sacCer3 / Ensembl R64-1-1 with STAR.
+**Real data:** SRR21628668 — BY UBR1 -469A>T *S. cerevisiae* RNA-seq, paired-end, ~152.6M read pairs (PRJNA882076). Aligned to sacCer3 / Ensembl R64-1-1 with STAR. Strand: reverse-stranded (dUTP/RF); R2 reads are sense-strand and used as training targets.
+
+The processed data lives in the `coaster-data` Modal volume as two parquet files:
+
+| File | Rows | Description |
+|---|---|---|
+| `samples_yeast.parquet` | 8,837 | Genomic windows: chr, strand, coordinates, 5000 bp DNA sequence, fold label |
+| `reads.parquet` | 8,654,803 | Extracted reads: `sample_idx` (FK to samples), `read_seq` (151 nt RNA, T→U applied) |
+
+To download them to `data/` locally or on a new cluster:
+
+```bash
+modal volume get coaster-data samples_yeast.parquet data/samples_yeast.parquet
+modal volume get coaster-data reads.parquet data/reads.parquet
+```
 
 **Synthetic data (Phase 1):** Random 4992 bp DNA sequences; target reads are 150 nt windows sampled uniformly and T→U converted. Used to validate architecture before real data is wired up.
 
@@ -92,14 +107,35 @@ Requires [uv](https://github.com/astral-sh/uv). A `.env` file must exist in the 
 
 ```bash
 uv sync
-uv run pytest          # run tests
-uv run python scripts/train.py --config configs/default.yaml
-uv run python scripts/train.py --device cpu   # override device
+uv run pytest                   # run tests
 ```
 
-Training defaults to `device: mps` (Apple Silicon). Falls back to CPU automatically if MPS is unavailable.
+## Training
 
-## Hyperparameters (default)
+```bash
+# Real data (recommended) — CUDA
+uv run python scripts/train.py --real --device cuda
+
+# Real data — Apple Silicon
+uv run python scripts/train.py --real
+
+# Synthetic data only (no parquet files needed)
+uv run python scripts/train.py --device cuda
+
+# Override the data paths
+uv run python scripts/train.py --real \
+    --samples /path/to/samples_yeast.parquet \
+    --reads   /path/to/reads.parquet
+
+# Sanity check: overfit one batch to ~0 loss before a full run
+uv run python scripts/train.py --real --overfit
+```
+
+The config device defaults to `mps`. Override with `--device cuda` or `--device cpu`, or change `training.device` in `configs/default.yaml`.
+
+Checkpoints are written to `checkpoints/epoch_NNN.pt` after each epoch.
+
+## Hyperparameters (default, `configs/default.yaml`)
 
 | Parameter | Value |
 |---|---|
@@ -111,7 +147,8 @@ Training defaults to `device: mps` (Apple Silicon). Falls back to CPU automatica
 | Attention heads | 4 |
 | FFN dim | 1024 |
 | Max RNA length | 200 tokens |
-| Batch size | 32 |
+| Batch size | 5 |
 | Learning rate | 3e-4 |
 | LR schedule | Cosine with 500-step warmup |
-| Training samples | 50 000 (synthetic) |
+| Weight decay | 0.01 |
+| Grad clip | 1.0 |

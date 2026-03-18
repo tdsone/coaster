@@ -37,3 +37,5 @@ uv.lock
 # Other
 .env
 data/samples.pkl
+data/reads.parquet
+data/samples_yeast.parquet
