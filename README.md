@@ -49,8 +49,43 @@ RNA read (one per forward pass, ~151 nt)
 - **Tests** — 58 tests covering tokenizers, model shapes, forward/backward, data pipeline, and training loop
 
 ### Next steps
-- Evaluate read sequence accuracy (e.g. edit distance, motif recovery)
+- **Switch training loop from epochs to total steps** — with 6.4M train reads and batch size 32, one epoch is ~200K steps; `num_epochs` in the config is not a useful knob for real-data training
+- **Evaluation pipeline** (see structure below)
 - Unfreeze/replace encoder with NTv3 once real-data training is established
+
+### Evaluation pipeline
+
+**Stages** (each independently runnable):
+1. `evals/generate.py` — local: model → per-window FASTQs via `generate_reads(model, dna_seq, n_reads, temperature=1.0)`
+2. `evals/eval_modal.py` — Modal, 4 steps:
+   - `build_index`: concatenate window sequences as chromosomes → STAR index
+   - `align`: synthetic FASTQs → sorted BAM (ENCODE STAR params, matching `scripts/align_modal.py`)
+   - `bigwigs`: BAM → forward/reverse strand CPM bigwigs (deeptools bamCoverage, bin=1)
+   - `real_coverage`: extract per-window sense-strand coverage from real sacCer3 BAM → `.npy` arrays
+3. `evals/compare.py` — local: synthetic bigwig vs real `.npy` coverage → per-window + aggregate Pearson/Spearman
+
+```bash
+# 1. Generate reads
+uv run python evals/generate.py --checkpoint checkpoints/epoch_010.pt --fold val --n-reads 100
+
+# 2. Upload FASTQs to Modal and run pipeline
+modal volume put coaster-evals evals/output/reads /reads
+uv run modal run evals/eval_modal.py --step all
+
+# 3. Download results and compare
+modal volume get coaster-evals real_coverage evals/output/real_coverage
+modal volume get coaster-evals bigwigs evals/output/bigwigs
+uv run python evals/compare.py --bigwig evals/output/bigwigs/synthetic_forward.bw --fold val
+```
+
+**Later tiers:**
+- Sequence-level: edit distance to nearest real read, k-mer spectra (`evals/sequence_metrics.py`)
+- Biological: splice junction usage, coverage at annotated features (`evals/bio_metrics.py`)
+- Downstream: synthetic bigwigs as input to an expression predictor
+
+**Design notes:**
+- Temperature sampling at T=1 is the principled choice: samples i.i.d. from P(read|DNA), reconstructing the learned distribution. Adjust upward only if empirical diversity is too low (overconfident model).
+- The model was trained on reads 50–200 nt, so early EOS and runaway generation are not expected. Do not pre-emptively filter generated reads by length — only add filtering if this is actually observed, as filtering distorts the generated distribution.
 
 ## Repository layout
 

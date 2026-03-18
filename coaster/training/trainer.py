@@ -13,6 +13,11 @@ from coaster.model.transformer import CoasterModel
 from coaster.model.config import TrainingConfig
 from coaster.tokenizer import RNATokenizer
 
+try:
+    import wandb
+except ImportError:
+    wandb = None
+
 
 class Trainer:
     def __init__(
@@ -42,6 +47,10 @@ class Trainer:
         # AMP only on CUDA; MPS uses float32
         self.use_amp = device.type == "cuda"
         self.scaler = torch.cuda.amp.GradScaler() if self.use_amp else None
+
+        if wandb is not None and config.wandb_project:
+            wandb.init(project=config.wandb_project, config=vars(config), save_code=False)
+            wandb.watch(model, log=None)
 
     @staticmethod
     def _lr_lambda(warmup_steps: int, total_steps: int):
@@ -92,11 +101,15 @@ class Trainer:
                 if self.step % self.config.log_interval == 0:
                     lr = self.scheduler.get_last_lr()[0]
                     print(f"epoch {epoch:3d} step {self.step:6d} | loss {loss.item():.4f} | lr {lr:.2e}")
+                    if wandb is not None and self.config.wandb_project:
+                        wandb.log({"train/loss": loss.item(), "train/lr": lr}, step=self.step)
                 self.step += 1
 
             if self.val_loader is not None:
                 val_loss = self._eval()
                 print(f"epoch {epoch:3d} | val_loss {val_loss:.4f}")
+                if wandb is not None and self.config.wandb_project:
+                    wandb.log({"val/loss": val_loss, "epoch": epoch}, step=self.step)
 
             self.save_checkpoint(os.path.join(self.config.checkpoint_dir, f"epoch_{epoch:03d}.pt"))
 

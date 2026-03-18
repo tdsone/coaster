@@ -48,6 +48,7 @@ class TrainingConfig:
     device: str = "mps"
     checkpoint_dir: str = "checkpoints"
     log_interval: int = 100
+    wandb_project: str | None = None
 
 
 def load_config(path: str | Path) -> tuple[EncoderConfig, DecoderConfig, TrainingConfig]:
