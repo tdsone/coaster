@@ -69,8 +69,9 @@ class RealRNADataset(Dataset):
         # Subsample reads per window if requested
         if max_reads_per_window is not None:
             reads = (
-                reads.groupby("sample_idx", sort=False, group_keys=False)
-                .apply(lambda g: g.sample(min(len(g), max_reads_per_window), random_state=seed))
+                reads.sample(frac=1, random_state=seed)
+                .groupby("sample_idx", sort=False)
+                .head(max_reads_per_window)
                 .reset_index(drop=True)
             )
 
