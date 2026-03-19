@@ -88,9 +88,20 @@ def train() -> None:
         checkpoints_vol.commit()
     trainer.save_checkpoint = _save_and_commit
 
+    resume_path = CHECKPOINT_DIR / "best.pt"
+    if resume_path.exists():
+        print(f"Resuming from {resume_path}")
+        trainer.load_checkpoint(str(resume_path))
+        steps_to_advance = trainer.step - trainer.scheduler.last_epoch
+        for _ in range(steps_to_advance):
+            trainer.scheduler.step()
+        print(f"Resumed at step {trainer.step}, lr {trainer.scheduler.get_last_lr()[0]:.2e}")
+    else:
+        print("No checkpoint found, training from scratch")
+
     trainer.train()
 
 
 @app.local_entrypoint()
 def main() -> None:
-    train.remote()
+    train.spawn()

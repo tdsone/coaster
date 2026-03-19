@@ -74,7 +74,7 @@ class Trainer:
             logits = self.model(dna_ids, rna_input, tgt_padding_mask=rna_pad_mask)
 
         return F.cross_entropy(
-            logits.reshape(-1, logits.size(-1)),
+            logits.float().reshape(-1, logits.size(-1)),
             rna_target.reshape(-1),
             ignore_index=RNATokenizer.PAD,
         )
@@ -151,13 +151,23 @@ class Trainer:
                 "epoch": self.epoch,
                 "model": self.model.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
+                "scheduler": self.scheduler.state_dict(),
             },
             path,
         )
 
     def load_checkpoint(self, path: str) -> None:
         ckpt = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(ckpt["model"])
-        self.optimizer.load_state_dict(ckpt["optimizer"])
+        result = self.model.load_state_dict(ckpt["model"], strict=False)
+        if result.missing_keys:
+            print(f"Checkpoint missing keys (will use initialised values): {result.missing_keys}")
+        if result.unexpected_keys:
+            print(f"Checkpoint has unexpected keys (ignored): {result.unexpected_keys}")
+        try:
+            self.optimizer.load_state_dict(ckpt["optimizer"])
+        except ValueError as e:
+            print(f"Optimizer state incompatible ({e}); starting with a fresh optimizer.")
+        if "scheduler" in ckpt:
+            self.scheduler.load_state_dict(ckpt["scheduler"])
         self.step = ckpt.get("step", 0)
         self.epoch = ckpt.get("epoch", 0)

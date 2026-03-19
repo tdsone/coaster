@@ -18,6 +18,7 @@ def main() -> None:
     parser.add_argument("--samples", default="data/samples_yeast.parquet")
     parser.add_argument("--reads", default="data/reads.parquet")
     parser.add_argument("--overfit", action="store_true", help="Overfit a single batch (sanity check)")
+    parser.add_argument("--resume", default=None, metavar="CHECKPOINT", help="Resume from checkpoint (e.g. checkpoints/best.pt)")
     args = parser.parse_args()
 
     enc_cfg, dec_cfg, train_cfg = load_config(args.config)
@@ -50,6 +51,18 @@ def main() -> None:
     print(f"Parameters: {n_params:,}")
 
     trainer = Trainer(model, train_loader, val_loader, train_cfg, device)
+
+    if args.resume:
+        print(f"Resuming from {args.resume}")
+        trainer.load_checkpoint(args.resume)
+        # Advance scheduler to match the restored step if it wasn't saved in the
+        # checkpoint (old format). New-format checkpoints restore scheduler state
+        # directly, so last_epoch already equals trainer.step.
+        steps_to_advance = trainer.step - trainer.scheduler.last_epoch
+        for _ in range(steps_to_advance):
+            trainer.scheduler.step()
+        print(f"Resumed at step {trainer.step}, lr {trainer.scheduler.get_last_lr()[0]:.2e}")
+
     trainer.train()
 
 

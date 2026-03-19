@@ -25,7 +25,23 @@ class RNADecoder(nn.Module):
         )
         self.layers = nn.TransformerDecoder(decoder_layer, num_layers=config.n_layers)
         self.norm = RMSNorm(d)
-        self.head = nn.Linear(d, config.vocab_size, bias=False)
+        self.head = nn.Linear(d, config.vocab_size, bias=True)
+        self._init_head_bias()
+
+    def _init_head_bias(self) -> None:
+        """Initialise head bias so the 4 nucleotides start with roughly equal
+        probability and special tokens are suppressed from the start."""
+        with torch.no_grad():
+            nn.init.zeros_(self.head.bias)
+            # Special tokens that should almost never be generated
+            self.head.bias[0] = -10.0  # PAD
+            self.head.bias[1] = -10.0  # BOS
+            # Rare but valid tokens
+            self.head.bias[2] = -2.0   # EOS  (~1/read_len frequency)
+            self.head.bias[7] = -3.0   # N    (ambiguous base, uncommon)
+            # A/U/G/C (indices 3-6) left at 0: roughly equal.
+            # The random weight matrix breaks exact symmetry, giving
+            # "roughly but not identically" equal initial probabilities.
 
     def forward(
         self,

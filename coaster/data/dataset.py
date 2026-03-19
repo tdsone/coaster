@@ -49,4 +49,5 @@ def make_dataloader(
     return DataLoader(
         dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn,
         num_workers=4, persistent_workers=True, pin_memory=True,
+        drop_last=shuffle,  # drop incomplete last batch during training only
     )
