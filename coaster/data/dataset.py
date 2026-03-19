@@ -1,4 +1,5 @@
 """DataLoader utilities for DNA/RNA training data."""
+
 from __future__ import annotations
 
 import torch
@@ -22,12 +23,10 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     dna_ids = torch.stack([item["dna_ids"] for item in batch])
 
     rna_inputs = [
-        torch.cat([torch.tensor([BOS], dtype=torch.long), item["rna_ids"]])
-        for item in batch
+        torch.cat([torch.tensor([BOS], dtype=torch.long), item["rna_ids"]]) for item in batch
     ]
     rna_targets = [
-        torch.cat([item["rna_ids"], torch.tensor([EOS], dtype=torch.long)])
-        for item in batch
+        torch.cat([item["rna_ids"], torch.tensor([EOS], dtype=torch.long)]) for item in batch
     ]
 
     rna_input = pad_sequence(rna_inputs, batch_first=True, padding_value=PAD)
@@ -47,4 +46,7 @@ def make_dataloader(
     batch_size: int,
     shuffle: bool = True,
 ) -> DataLoader:
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn, num_workers=0)
+    return DataLoader(
+        dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn,
+        num_workers=4, persistent_workers=True, pin_memory=True,
+    )

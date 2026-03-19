@@ -50,7 +50,7 @@ class RealRNADataset(Dataset):
         fold: str | None = "train",
         dna_len: int = 5000,
         min_read_len: int = 50,
-        max_read_len: int = 200,
+        max_read_len: int = 300,
         max_reads_per_window: int | None = None,
         seed: int = 42,
     ) -> None:
@@ -77,24 +77,24 @@ class RealRNADataset(Dataset):
 
         # Build a fast dict lookup: sample_idx (int) → dna string
         self.dna_lookup: dict[int, str] = samples["input_sequence"].to_dict()
-        # Flat list of records; shuffled order handled by DataLoader
-        self.reads: list[dict] = reads[["sample_idx", "read_seq"]].to_dict("records")
+        # Keep as arrays to avoid per-element Python object overhead in workers
+        self.sample_idxs = reads["sample_idx"].to_numpy()
+        self.read_seqs = reads["read_seq"].to_numpy()
         self.dna_len = dna_len
 
         n_windows = len(samples)
-        n_reads = len(self.reads)
+        n_reads = len(self.sample_idxs)
         print(
             f"RealRNADataset [{fold}]: {n_reads:,} reads across {n_windows} windows "
             f"(avg {n_reads / max(n_windows, 1):.0f} reads/window)"
         )
 
     def __len__(self) -> int:
-        return len(self.reads)
+        return len(self.sample_idxs)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        record = self.reads[idx]
-        dna = _trim_or_pad_dna(self.dna_lookup[record["sample_idx"]], self.dna_len)
-        rna = record["read_seq"]  # already T→U from extraction script
+        dna = _trim_or_pad_dna(self.dna_lookup[self.sample_idxs[idx]], self.dna_len)
+        rna = self.read_seqs[idx]  # already T→U from extraction script
 
         return {
             "dna_ids": torch.tensor(_DNA_TOK.encode(dna), dtype=torch.long),

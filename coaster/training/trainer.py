@@ -1,7 +1,6 @@
 """Training loop for CoasterModel."""
 from __future__ import annotations
 
-import itertools
 import math
 import os
 
@@ -56,7 +55,8 @@ class Trainer:
     def _lr_lambda(warmup_steps: int, total_steps: int):
         def fn(step: int) -> float:
             if step < warmup_steps:
-                return step / max(1, warmup_steps)
+                # Avoid a zero-LR update immediately after the first optimizer step.
+                return (step + 1) / max(1, warmup_steps)
             progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
             return 0.5 * (1.0 + math.cos(math.pi * progress))
         return fn
@@ -83,41 +83,48 @@ class Trainer:
         self.best_val_loss = float("inf")
         try:
             self.model.train()
-            for batch in itertools.islice(itertools.cycle(self.train_loader), self.config.max_steps):
-                loss = self._forward_loss(batch)
-                if self.use_amp:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)
-                    nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
-                    self.optimizer.step()
-                self.scheduler.step()
-                self.optimizer.zero_grad()
+            while self.step < self.config.max_steps:
+                # Iterate through a fresh DataLoader each epoch so shuffle is re-applied.
+                for batch in self.train_loader:
+                    if self.step >= self.config.max_steps:
+                        break
 
-                if self.step % self.config.log_interval == 0:
-                    lr = self.scheduler.get_last_lr()[0]
-                    print(f"step {self.step:7d} | loss {loss.item():.4f} | lr {lr:.2e}")
-                    if wandb is not None and self.config.wandb_project:
-                        wandb.log({"train/loss": loss.item(), "train/lr": lr}, step=self.step)
+                    loss = self._forward_loss(batch)
+                    if self.use_amp:
+                        assert self.scaler is not None
+                        self.scaler.scale(loss).backward()
+                        self.scaler.unscale_(self.optimizer)
+                        nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        loss.backward()
+                        nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
+                        self.optimizer.step()
+                    self.scheduler.step()
+                    self.optimizer.zero_grad()
 
-                if self.step > 0 and self.step % self.config.eval_interval == 0:
-                    if self.val_loader is not None:
-                        val_loss = self._eval()
-                        print(f"step {self.step:7d} | val_loss {val_loss:.4f}")
+                    if self.step % self.config.log_interval == 0:
+                        lr = self.scheduler.get_last_lr()[0]
+                        print(f"step {self.step:7d} | loss {loss.item():.4f} | lr {lr:.2e}")
                         if wandb is not None and self.config.wandb_project:
-                            wandb.log({"val/loss": val_loss}, step=self.step)
-                        if val_loss < self.best_val_loss:
-                            self.best_val_loss = val_loss
-                            self.save_checkpoint(os.path.join(self.config.checkpoint_dir, "best.pt"))
-                            print(f"step {self.step:7d} | saved best.pt (val_loss {val_loss:.4f})")
-                    self.save_checkpoint(os.path.join(self.config.checkpoint_dir, f"step_{self.step:07d}.pt"))
-                    self.model.train()
+                            wandb.log({"train/loss": loss.item(), "train/lr": lr}, step=self.step)
 
-                self.step += 1
+                    if self.step > 0 and self.step % self.config.eval_interval == 0:
+                        if self.val_loader is not None:
+                            val_loss = self._eval()
+                            print(f"step {self.step:7d} | val_loss {val_loss:.4f}")
+                            if wandb is not None and self.config.wandb_project:
+                                wandb.log({"val/loss": val_loss}, step=self.step)
+                            if val_loss < self.best_val_loss:
+                                self.best_val_loss = val_loss
+                                self.save_checkpoint(os.path.join(self.config.checkpoint_dir, "best.pt"))
+                                print(f"step {self.step:7d} | saved best.pt (val_loss {val_loss:.4f})")
+                        self.save_checkpoint(os.path.join(self.config.checkpoint_dir, f"step_{self.step:07d}.pt"))
+                        self.model.train()
+
+                    self.step += 1
+                self.epoch += 1
 
         except KeyboardInterrupt:
             print("\nInterrupted — saving last.pt …")
@@ -126,6 +133,7 @@ class Trainer:
             raise
 
     def _eval(self) -> float:
+        assert self.val_loader is not None
         self.model.eval()
         total, count = 0.0, 0
         with torch.no_grad():
