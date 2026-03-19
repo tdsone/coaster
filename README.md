@@ -1,6 +1,6 @@
 # coaster
 
-A DNA-to-RNA encoder-decoder transformer that models yeast (*S. cerevisiae*) transcription. Given a ~4 kb genomic DNA window, the model learns to generate RNA-seq reads that would plausibly originate from that region.
+A DNA-to-RNA encoder-decoder transformer that models yeast (*S. cerevisiae*) transcription. Given a ~5 kb genomic DNA window, the model learns to generate RNA-seq reads that would plausibly originate from that region.
 
 ## Table of contents
 - [coaster](#coaster)
@@ -16,7 +16,7 @@ A DNA-to-RNA encoder-decoder transformer that models yeast (*S. cerevisiae*) tra
   - [Data](#data)
     - [Genomic windows (`samples.pkl` / `samples_yeast.parquet`)](#genomic-windows-samplespkl--samples_yeastparquet)
     - [Strand orientation and read extraction](#strand-orientation-and-read-extraction)
-    - [Paired-end merging (planned)](#paired-end-merging-planned)
+    - [Paired-end merging](#paired-end-merging)
   - [Setup](#setup)
   - [Training](#training)
   - [Hyperparameters (default, `configs/default.yaml`)](#hyperparameters-default-configsdefaultyaml)
@@ -62,36 +62,42 @@ RNA read (one per forward pass, ~151 nt)
 - **Alignment pipeline** — `scripts/align_modal.py`: Modal-based pipeline to download the sacCer3 reference genome (Ensembl R111), build a STAR index, download SRR21628668 paired-end RNA-seq (~14 GB from NCBI S3), and align to produce a sorted BAM + gene counts
 - **Read extraction** — `scripts/extract_reads_modal.py`: extracts R2 reads (sense strand, dUTP library) from the BAM for each yeast genomic window using reservoir sampling (≤1000 reads/window), saves `reads.parquet` and `samples_yeast.parquet` to the `coaster-data` Modal volume
 - **Model** — full encoder-decoder architecture (`coaster/model/`)
+- **Paired-end merging** — `coaster/preprocessing.py`: `revcomp`, `to_gene_sense`, `merge_pair` helpers; `scripts/extract_reads_modal.py` now converts both R1 and R2 to gene-sense direction and merges overlapping pairs into full insert sequences before reservoir-sampling
 - **Real data** — `RealRNADataset` pairs 8.65M extracted reads with their 5000 bp DNA windows across train/val/test folds
 - **Trainer** — AdamW + cosine LR schedule with warmup; AMP on CUDA (autocast + grad scaler), float32 on MPS/CPU; checkpoint save/load
-- **Tests** — 58 tests covering tokenizers, model shapes, forward/backward, data pipeline, and training loop
+- **Evaluation pipeline** — `evals/generate.py` → `evals/eval_modal.py` (5-step Modal pipeline) → `evals/compare.py` / `evals/visualize.py`; local alternative via `evals/compute_coverage.py`
+- **Tests** — 58 tests covering tokenizers, model shapes, forward/backward, data pipeline, training loop, and preprocessing helpers
 
 ### Next steps
-- **Evaluation pipeline** (see structure below)
 - Unfreeze/replace encoder with NTv3 once real-data training is established
 
 ### Evaluation pipeline
 
 **Stages** (each independently runnable):
-1. `evals/generate.py` — local: model → per-window FASTQs via `generate_reads(model, dna_seq, n_reads, temperature=1.0)`
-2. `evals/eval_modal.py` — Modal, 4 steps:
+1. `evals/generate.py` — local: model → per-window FASTQs (two-phase: encode all windows once, then decode in large cross-window batches)
+2. `evals/eval_modal.py` — Modal, 5 steps:
    - `build_index`: concatenate window sequences as chromosomes → STAR index
    - `align`: synthetic FASTQs → sorted BAM (ENCODE STAR params, matching `scripts/align_modal.py`)
    - `bigwigs`: BAM → forward/reverse strand CPM bigwigs (deeptools bamCoverage, bin=1)
    - `real_coverage`: extract per-window sense-strand coverage from real sacCer3 BAM → `.npy` arrays
+   - `synth_coverage`: extract per-window coverage from synthetic BAM → `.npy` arrays
 3. `evals/compare.py` — local: synthetic bigwig vs real `.npy` coverage → per-window + aggregate Pearson/Spearman
+4. `evals/visualize.py` — local: plot real vs synthetic coverage tracks per window
+
+A lighter local alternative skips STAR alignment and instead uses exact substring search to compute coverage:
+`evals/compute_coverage.py` — real `reads.parquet` + synthetic FASTQs → `.npy` coverage arrays for both (use with `evals/visualize.py`)
 
 ```bash
 # 1. Generate reads
 uv run python evals/generate.py --checkpoint checkpoints/epoch_010.pt --fold val --n-reads 100
 
 # 2. Upload FASTQs to Modal and run pipeline
-modal volume put coaster-evals evals/output/reads /reads
+uv run modal volume put coaster-evals evals/output/reads /reads
 uv run modal run evals/eval_modal.py --step all
 
 # 3. Download results and compare
-modal volume get coaster-evals real_coverage evals/output/real_coverage
-modal volume get coaster-evals bigwigs evals/output/bigwigs
+uv run modal volume get coaster-evals real_coverage evals/output/real_coverage
+uv run modal volume get coaster-evals bigwigs evals/output/bigwigs
 uv run python evals/compare.py --bigwig evals/output/bigwigs/synthetic_forward.bw --fold val
 ```
 
@@ -108,6 +114,7 @@ uv run python evals/compare.py --bigwig evals/output/bigwigs/synthetic_forward.b
 ```
 coaster/
   tokenizer.py          DNA (vocab=6) and RNA (vocab=8) tokenizers
+  preprocessing.py      Strand helpers: revcomp, to_gene_sense, merge_pair
   model/
     config.py           EncoderConfig, DecoderConfig, TrainingConfig dataclasses + load_config()
     layers.py           RMSNorm, SinusoidalPosEmb
@@ -120,14 +127,16 @@ coaster/
   training/
     trainer.py          Trainer (train loop, eval, checkpointing, wandb logging)
 scripts/
-  train.py              Training entry point (synthetic or real data)
+  train.py              Training entry point
   align_modal.py        Modal pipeline: genome download → STAR index → alignment
   extract_reads_modal.py  Modal pipeline: BAM → reads.parquet + samples_yeast.parquet
   download_sra.py       Local SRA download helper for SRR21628668
 evals/
-  generate.py           model → per-window FASTQs (temperature sampling)
-  eval_modal.py         Modal: STAR index → align → bigwigs + real coverage extraction
-  compare.py            synthetic vs real coverage → Pearson/Spearman metrics
+  generate.py           model → per-window FASTQs (two-phase encode + decode)
+  eval_modal.py         Modal: STAR index → align → bigwigs + real/synth coverage extraction
+  compute_coverage.py   Local alternative: reads → .npy coverage arrays via exact substring search
+  compare.py            synthetic bigwig vs real .npy coverage → Pearson/Spearman metrics
+  visualize.py          plot real vs synthetic coverage tracks per window
 configs/
   default.yaml          Default hyperparameters
 tests/                  58 pytest tests
@@ -147,8 +156,8 @@ The processed data lives in the `coaster-data` Modal volume as two parquet files
 To download them to `data/` locally or on a new cluster:
 
 ```bash
-modal volume get coaster-data samples_yeast.parquet data/samples_yeast.parquet
-modal volume get coaster-data reads.parquet data/reads.parquet
+uv run modal volume get coaster-data samples_yeast.parquet data/samples_yeast.parquet
+uv run modal volume get coaster-data reads.parquet data/reads.parquet
 ```
 
 ### Genomic windows (`samples.pkl` / `samples_yeast.parquet`)
@@ -181,30 +190,21 @@ pysam stores reverse-strand-mapped reads as their reverse complement in the BAM 
 | `+` | + genomic = gene-sense ✓ | use as-is |
 | `-` | + genomic = gene-**anti**sense ✗ | reverse-complement before saving |
 
-**Consequence:** the current `extract_reads_modal.py` has a bug — for `−` strand genes it stores reads in the gene-antisense direction, so the model trains on (gene-sense DNA, gene-antisense reads). This needs to be fixed in the next extraction run.
+`coaster/preprocessing.py` provides `to_gene_sense(query_sequence, gene_strand)` which applies the reverse-complement for `−` strand genes. This is called for both R1 and R2 in `scripts/extract_reads_modal.py`.
 
-### Paired-end merging (planned)
+### Paired-end merging
 
-Both reads of a pair span the same cDNA fragment from opposite ends. After converting to gene-sense direction, R2 covers the 5′ portion and RC(R1) covers the 3′ portion. When the insert is short enough that they overlap (common for yeast, where many fragments are <302 bp), they can be merged into the full insert sequence:
+Both reads of a pair span the same cDNA fragment from opposite ends. After converting to gene-sense direction, R2 covers the 5′ portion and R1 covers the 3′ portion. When the insert is short enough for them to overlap (common for yeast, where many fragments are <302 bp), they are merged into the full insert sequence:
 
 ```
 Gene 5'→3':  [=======R2=======>]
-                      [<=======R1=======]   (R1 maps opposite strand; gene-sense = RC of query_sequence for + gene)
+                      [<=======R1=======]
 Merged:      [===========full insert===========]
 ```
 
-The extraction script should be updated to:
-1. Fetch both R1 and R2 for each pair (match by `query_name`).
-2. Convert both to gene-sense direction (RC both if `strand == '-'`).
-3. Merge overlapping pairs into one longer read; keep R2 only for non-overlapping pairs.
-4. Apply reservoir sampling at the pair level.
+`coaster/preprocessing.py` provides `merge_pair(r2_sense, r1_sense)`, which finds the longest suffix/prefix overlap (minimum 10 nt) and returns the merged insert, or R2 alone if no overlap is found. `scripts/extract_reads_modal.py` fetches both R1 and R2 per pair, converts both to gene-sense, merges where possible, and applies reservoir sampling at the pair level.
 
-**TODO:** In practice ~42% of reads get merged and ~58% remain as R2-only (151 nt), so the
-training data is a mix of short (~151 nt) and longer (~150–300 nt) inserts. This is fine
-architecturally (the decoder is autoregressive and length-agnostic) but the model is implicitly
-learning two subtly different things without knowing which is which. Options to consider:
-only train on merged reads (drop 58% of data but cleaner), always produce a fixed-length
-representation, or condition the decoder on insert type. Revisit once baseline training is stable.
+**Note:** In practice ~42% of reads get merged and ~58% remain as R2-only (151 nt), so the training data is a mix of short (~151 nt) and longer (~150–300 nt) inserts. The decoder is autoregressive and length-agnostic, but the model implicitly learns two subtly different things without knowing which is which. Options to consider: only train on merged reads (drop 58% of data but cleaner), or condition the decoder on insert type. Revisit once baseline training is stable.
 
 
 ## Setup
