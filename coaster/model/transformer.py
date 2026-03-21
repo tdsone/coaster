@@ -11,6 +11,9 @@ from .decoder import RNADecoder
 
 
 class CoasterModel(nn.Module):
+    # RNA token index → DNA token index (transcription: T→U, rest identical)
+    _RNA_TO_DNA: dict[int, int] = {3: 1, 4: 2, 5: 3, 6: 4, 7: 5}
+
     def __init__(self, enc_config: EncoderConfig, dec_config: DecoderConfig) -> None:
         super().__init__()
         self.encoder = DNAEncoder(enc_config)
@@ -20,6 +23,23 @@ class CoasterModel(nn.Module):
             self.enc_proj: nn.Module = nn.Linear(enc_config.d_model, dec_config.d_model, bias=False)
         else:
             self.enc_proj = nn.Identity()
+
+        if enc_config.d_model == dec_config.d_model:
+            self._align_embeddings()
+
+    def _align_embeddings(self) -> None:
+        """Seed decoder nucleotide embeddings and output head from the encoder,
+        respecting the T→U transcription mapping.
+
+        After this, cross-attention dot products are highest for matching
+        nucleotide pairs from step 0, giving the model a built-in copy bias.
+        Both tables remain independent parameters and will diverge during training.
+        """
+        with torch.no_grad():
+            for rna_idx, dna_idx in self._RNA_TO_DNA.items():
+                src = self.encoder.embedding.weight[dna_idx]
+                self.decoder.embedding.weight[rna_idx] = src
+                self.decoder.head.weight[rna_idx] = src
 
     def forward(
         self,
