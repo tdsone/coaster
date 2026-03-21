@@ -1,4 +1,5 @@
 """Training loop for CoasterModel."""
+
 from __future__ import annotations
 
 import math
@@ -59,6 +60,7 @@ class Trainer:
                 return (step + 1) / max(1, warmup_steps)
             progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
             return 0.5 * (1.0 + math.cos(math.pi * progress))
+
         return fn
 
     def _forward_loss(self, batch: dict) -> torch.Tensor:
@@ -94,21 +96,40 @@ class Trainer:
                         assert self.scaler is not None
                         self.scaler.scale(loss).backward()
                         self.scaler.unscale_(self.optimizer)
-                        nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
+                        grad_norm = nn.utils.clip_grad_norm_(
+                            self.model.parameters(), self.config.grad_clip
+                        )
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:
                         loss.backward()
-                        nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
+                        grad_norm = nn.utils.clip_grad_norm_(
+                            self.model.parameters(), self.config.grad_clip
+                        )
                         self.optimizer.step()
                     self.scheduler.step()
                     self.optimizer.zero_grad()
 
                     if self.step % self.config.log_interval == 0:
                         lr = self.scheduler.get_last_lr()[0]
-                        print(f"step {self.step:7d} | loss {loss.item():.4f} | lr {lr:.2e}")
+                        grad_norm_value = (
+                            grad_norm.detach().item()
+                            if isinstance(grad_norm, torch.Tensor)
+                            else float(grad_norm)
+                        )
+                        print(
+                            f"step {self.step:7d} | loss {loss.item():.4f} | ppxty: {math.exp(loss.item()):.2f}"
+                            f" | gnorm {grad_norm_value:.2f} | lr {lr:.2e}"
+                        )
                         if wandb is not None and self.config.wandb_project:
-                            wandb.log({"train/loss": loss.item(), "train/lr": lr}, step=self.step)
+                            wandb.log(
+                                {
+                                    "train/loss": loss.item(),
+                                    "train/lr": lr,
+                                    "train/grad_norm": grad_norm_value,
+                                },
+                                step=self.step,
+                            )
 
                     if self.step > 0 and self.step % self.config.eval_interval == 0:
                         if self.val_loader is not None:
@@ -118,9 +139,15 @@ class Trainer:
                                 wandb.log({"val/loss": val_loss}, step=self.step)
                             if val_loss < self.best_val_loss:
                                 self.best_val_loss = val_loss
-                                self.save_checkpoint(os.path.join(self.config.checkpoint_dir, "best.pt"))
-                                print(f"step {self.step:7d} | saved best.pt (val_loss {val_loss:.4f})")
-                        self.save_checkpoint(os.path.join(self.config.checkpoint_dir, f"step_{self.step:07d}.pt"))
+                                self.save_checkpoint(
+                                    os.path.join(self.config.checkpoint_dir, "best.pt")
+                                )
+                                print(
+                                    f"step {self.step:7d} | saved best.pt (val_loss {val_loss:.4f})"
+                                )
+                        self.save_checkpoint(
+                            os.path.join(self.config.checkpoint_dir, f"step_{self.step:07d}.pt")
+                        )
                         self.model.train()
 
                     self.step += 1

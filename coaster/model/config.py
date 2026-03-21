@@ -1,4 +1,5 @@
 """Model and training configuration dataclasses."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,7 +45,6 @@ class TrainingConfig:
     weight_decay: float = 0.01
     warmup_steps: int = 500
     grad_clip: float = 1.0
-    num_samples: int = 50000
     seed: int = 42
     device: str = "mps"
     checkpoint_dir: str = "checkpoints"

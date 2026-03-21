@@ -10,7 +10,9 @@ from coaster.data.dataset import collate_fn, make_dataloader
 from coaster.training import Trainer
 
 # Small configs for fast CPU tests
-ENC = EncoderConfig(d_model=32, n_heads=2, n_layers=1, ffn_dim=64, dna_len=64, conv_kernel=8, conv_stride=8)
+ENC = EncoderConfig(
+    d_model=32, n_heads=2, n_layers=1, ffn_dim=64, dna_len=64, conv_kernel=8, conv_stride=8
+)
 DEC = DecoderConfig(d_model=32, n_heads=2, n_layers=1, ffn_dim=64, max_rna_len=30)
 
 
@@ -39,7 +41,6 @@ def small_train_cfg(tmp_path):
         max_steps=20,
         eval_interval=1000,
         lr=1e-3,
-        num_samples=10,
         log_interval=1000,
         checkpoint_dir=str(tmp_path / "ckpts"),
     )
@@ -89,9 +90,7 @@ def test_checkpoint_save_load(tiny_loader, small_train_cfg, tmp_path):
     trainer2 = Trainer(model2, tiny_loader, None, small_train_cfg, device)
     trainer2.load_checkpoint(path)
 
-    for (k, v1), (_, v2) in zip(
-        model.state_dict().items(), model2.state_dict().items()
-    ):
+    for (k, v1), (_, v2) in zip(model.state_dict().items(), model2.state_dict().items()):
         assert torch.allclose(v1, v2), f"State mismatch at {k}"
 
 

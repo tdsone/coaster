@@ -19,14 +19,13 @@ decoder:
   max_rna_len: 301
 
 training:
-  batch_size: 512
+  batch_size: 128
   max_steps: 500000
   eval_interval: 10000
-  lr: 1.0e-3
+  lr: 5.0e-3
   weight_decay: 0.01
   warmup_steps: 8000
   grad_clip: 1.0
-  num_samples: 100
   seed: 42
   device: cuda
   checkpoint_dir: checkpoints
