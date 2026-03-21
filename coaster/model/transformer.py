@@ -28,18 +28,20 @@ class CoasterModel(nn.Module):
             self._align_embeddings()
 
     def _align_embeddings(self) -> None:
-        """Seed decoder nucleotide embeddings and output head from the encoder,
-        respecting the T→U transcription mapping.
+        """Seed decoder nucleotide embeddings from the encoder, respecting the
+        T→U transcription mapping.
 
         After this, cross-attention dot products are highest for matching
         nucleotide pairs from step 0, giving the model a built-in copy bias.
         Both tables remain independent parameters and will diverge during training.
+
+        Only the input embedding is aligned — the output head keeps its
+        Kaiming-uniform init so the carefully tuned head-bias logit balance
+        (from _init_head_bias) is preserved.
         """
         with torch.no_grad():
             for rna_idx, dna_idx in self._RNA_TO_DNA.items():
-                src = self.encoder.embedding.weight[dna_idx]
-                self.decoder.embedding.weight[rna_idx] = src
-                self.decoder.head.weight[rna_idx] = src
+                self.decoder.embedding.weight[rna_idx] = self.encoder.embedding.weight[dna_idx]
 
     def forward(
         self,
