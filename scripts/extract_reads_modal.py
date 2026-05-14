@@ -41,7 +41,12 @@ Chromosome mapping: samples.pkl uses NCBI RefSeq names (NC_001133.9, etc.);
 
 Output (coaster-data volume):
   /data/coaster/samples_yeast.parquet  — yeast windows with fold labels
-  /data/coaster/reads.parquet          — (sample_idx, read_seq) pairs, T→U applied
+  /data/coaster/reads.parquet          — one row per insert with columns:
+      sample_idx (int), read_seq (str, T→U), strand (int8, 0=+, 1=-),
+      ref_start (int32, 0-based inclusive on the + genomic strand),
+      ref_end   (int32, 0-based inclusive on the + genomic strand).
+      ref_start <= ref_end always (universal pos_min/pos_max convention).
+      Coordinates are in *reference space* — `strand` tells you which end is 5'.
 
 Usage:
     modal run scripts/extract_reads_modal.py
@@ -145,7 +150,12 @@ def extract_reads(max_reads_per_window: int = 1000) -> None:
 
             # Build insert sequences in gene-sense direction.
             # One insert per R2 read (merged with its R1 mate if they overlap).
-            inserts: list[str] = []
+            # Each insert keeps a (ref_start, ref_end) span on the + genomic
+            # strand: pos_min = min(R2.reference_start, R1.reference_start) etc.
+            # Strand for the read model is 0 if gene_strand == '+', else 1.
+            strand_id = 0 if gene_strand == "+" else 1
+
+            inserts: list[tuple[str, int, int, int]] = []   # (seq, strand, ref_start, ref_end)
             n_merged = n_r2_only = 0
 
             for reads in by_name.values():
@@ -155,6 +165,14 @@ def extract_reads(max_reads_per_window: int = 1000) -> None:
 
                 r2_sense = to_gene_sense(r2.query_sequence, gene_strand)
                 r1 = reads.get("R1")
+
+                # Reference span: pos_min/pos_max across both mates.
+                # pysam uses 0-based half-open; ref_end below is 0-based inclusive.
+                ref_start = r2.reference_start
+                ref_end = r2.reference_end - 1
+                if r1 is not None:
+                    ref_start = min(ref_start, r1.reference_start)
+                    ref_end = max(ref_end, r1.reference_end - 1)
 
                 if r1 is not None:
                     r1_sense = to_gene_sense(r1.query_sequence, gene_strand)
@@ -167,7 +185,7 @@ def extract_reads(max_reads_per_window: int = 1000) -> None:
                     insert = r2_sense
                     n_r2_only += 1
 
-                inserts.append(insert)
+                inserts.append((insert, strand_id, ref_start, ref_end))
 
             total_inserts += len(inserts)
             total_merged += n_merged
@@ -184,10 +202,13 @@ def extract_reads(max_reads_per_window: int = 1000) -> None:
                     if idx < k:
                         sample[idx] = inserts[j]
 
-            for seq in sample:
+            for seq, strand_id, ref_start, ref_end in sample:
                 records.append({
                     "sample_idx": int(sample_idx),
                     "read_seq": seq.replace("T", "U"),
+                    "strand": int(strand_id),
+                    "ref_start": int(ref_start),
+                    "ref_end": int(ref_end),
                 })
 
             if sample_idx % 5 == 0:

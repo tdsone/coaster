@@ -1,34 +1,39 @@
-encoder:
-  vocab_size: 6
-  d_model: 256
-  n_heads: 4
-  n_layers: 4
-  ffn_dim: 1024
-  dropout: 0.1
+model:
+  d_model: 384
+  n_heads: 6
+  n_layers: 8
+  # d_ffn omitted → defaults to 8/3·d_model rounded to a multiple of 64.
+  vocab_size: 7
   dna_len: 4992
-  conv_kernel: 8
-  conv_stride: 8
-
-decoder:
-  vocab_size: 8
-  d_model: 256
-  n_heads: 4
-  n_layers: 4
-  ffn_dim: 1024
-  dropout: 0.1
-  max_rna_len: 301
+  rope_base: 10000.0
+  # Conditioning axes — 0 disables that embedding. Bump these once we go
+  # multi-experiment (assay/cell type/species token swap experiments).
+  n_assays: 0
+  n_cell_types: 0
+  n_species: 0
+  # If the assay has a known max insert length, set this so the end head also
+  # masks `j > start + max_read_len`. Leave null for unconstrained.
+  max_read_len: null
 
 training:
-  batch_size: 128
+  batch_size: 32
   max_steps: 500000
   eval_interval: 10000
-  lr: 5.0e-3
+  lr: 3.0e-4
   weight_decay: 0.01
-  warmup_steps: 8000
+  warmup_steps: 2000
   grad_clip: 1.0
   seed: 42
   device: cuda
   checkpoint_dir: checkpoints
   log_interval: 100
-  val_reads_per_window: 50
   wandb_project: coaster
+  alpha_mlm: 1.0
+  beta_read: 1.0
+  # In-batch task mixing — independent Bernoullis per sample.
+  # Spec §4 default mix (40 MLM-only / 40 read-only / 20 joint) is
+  # (p_mlm, p_reads) ≈ (0.6, 0.6). Drop both to disable.
+  p_mlm: 0.6
+  p_reads: 0.6
+  mlm_mask_prob: 0.15
+  rc_aug_prob: 0.5

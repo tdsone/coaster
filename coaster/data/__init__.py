@@ -1,5 +1,12 @@
-"""Data pipeline."""
-from coaster.data.dataset import collate_fn, make_dataloader
-from coaster.data.real_data import RealRNADataset
+"""Data pipeline for the pointer-factorized read model."""
+from coaster.data.dataset import ReadsDataset, make_collate_fn, make_dataloader
+from coaster.data.rc_aug import rc_dna, rc_positions, rc_strand
 
-__all__ = ["collate_fn", "make_dataloader", "RealRNADataset"]
+__all__ = [
+    "ReadsDataset",
+    "make_collate_fn",
+    "make_dataloader",
+    "rc_dna",
+    "rc_positions",
+    "rc_strand",
+]

@@ -1,15 +1,16 @@
-"""Model components."""
-from coaster.model.config import EncoderConfig, DecoderConfig, TrainingConfig, load_config
-from coaster.model.encoder import DNAEncoder
-from coaster.model.decoder import RNADecoder
-from coaster.model.transformer import CoasterModel
+"""Model components for the pointer-factorized read model."""
+from coaster.model.config import ModelConfig, TrainingConfig, load_config
+from coaster.model.layers import RMSNorm, RoPECache, SwiGLU, Block, apply_rope
+from coaster.model.read_model import ReadModel
 
 __all__ = [
-    "EncoderConfig",
-    "DecoderConfig",
+    "ModelConfig",
     "TrainingConfig",
     "load_config",
-    "DNAEncoder",
-    "RNADecoder",
-    "CoasterModel",
+    "RMSNorm",
+    "RoPECache",
+    "SwiGLU",
+    "Block",
+    "apply_rope",
+    "ReadModel",
 ]
